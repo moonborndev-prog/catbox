@@ -615,7 +615,7 @@ const store={
 const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 let lvIdx=0, lv=null, st=null, kinds=null, hist=[], moves=0, won=false;
 let anims={}, cam={x:0,y:0,s:1}, layout=null, particles=[], shake=0;
-let targetWasCovered={}, deadWarned=false, blink=0, blinkNext=2.5, tGlobal=0, sleepT=0, zzzTimer=0, deadEdges={}, startPos={}, runQueue=[], runCd=0, runStepN=0, dragging=false, dragPt=null, dragCd=0, dragMoved=false, lastMove=null, pushFace=0;
+let targetWasCovered={}, deadWarned=false, blink=0, blinkNext=2.5, tGlobal=0, sleepT=0, zzzTimer=0, deadEdges={}, startPos={}, runQueue=[], runCd=0, runStepN=0, dragging=false, dragPt=null, dragCd=0, dragMoved=false, lastMove=null, pushFace=0, grabOff=[0,0], dragLift=0;
 
 function coveredKey(t){return t.join(',');}
 function boxTargetCovered(t){
@@ -845,9 +845,10 @@ function updateAnims(){
     }
   }
   if(dragging&&dragPt&&!won){
+    dragLift+=(1-dragLift)*0.16;
     dragCd-=1/60;
     if(dragCd<=0){
-      const [wx,wy]=screenToWorld(dragPt[0],dragPt[1]);
+      const [wx,wy]=dragControlWorld();
       const cell=cellAtWorld(wx,wy);
       const [ps,px,py]=st['p'];
       let first=null,second=null;
@@ -1337,7 +1338,7 @@ function frame(){
   drawFloor('root',(x,y)=>rootRect(x,y),false);
   drawTargets('root',(x,y)=>rootRect(x,y));
   if(dragging&&dragPt){
-    const [hwx,hwy]=screenToWorld(dragPt[0],dragPt[1]);
+    const [hwx,hwy]=dragControlWorld();
     const hc=cellAtWorld(hwx,hwy);
     if(hc){
       const w=E.isWall(lv,hc.space,hc.x,hc.y);
@@ -1459,11 +1460,22 @@ function tryWalkTo(sx,sy){
   if(path===null||!path.length){SFX.blocked();return;}
   runQueue=path; runCd=0; runStepN=0;
 }
+function dragControlWorld(){
+  const [wx,wy]=screenToWorld(dragPt[0],dragPt[1]);
+  return [wx+grabOff[0], wy+grabOff[1]-layout.cs*0.9*dragLift];
+}
+function beginDrag(sx,sy){
+  const [wx,wy]=screenToWorld(sx,sy);
+  const a=anims['p'];
+  grabOff=a?[(a.x+a.s/2)-wx,(a.y+a.s/2)-wy]:[0,0];
+  dragLift=0;
+  dragging=true; dragMoved=false; dragPt=[sx,sy]; dragCd=0; runQueue=[];
+}
 function catAtScreen(sx,sy){
   const [wx,wy]=screenToWorld(sx,sy);
   const a=anims['p']; if(!a)return false;
   const pad=a.s*0.22;
-  return wx>=a.x-pad&&wx<=a.x+a.s+pad&&wy>=a.y-a.s*0.35&&wy<=a.y+a.s+pad;
+  return wx>=a.x-pad&&wx<=a.x+a.s+pad&&wy>=a.y-a.s*0.35&&wy<=a.y+a.s+a.s*0.55;
 }
 function tryDoubleTapAt(sx,sy){
   const [wx,wy]=screenToWorld(sx,sy);
@@ -1478,7 +1490,7 @@ stage.addEventListener('touchstart',e=>{
   const rect=cv.getBoundingClientRect();
   const sx=e.touches[0].clientX-rect.left, sy=e.touches[0].clientY-rect.top;
   if(catAtScreen(sx,sy)&&!won){
-    dragging=true; dragMoved=false; dragPt=[sx,sy]; dragCd=0; runQueue=[]; touchStart=null;
+    beginDrag(sx,sy); touchStart=null;
     return;
   }
   touchStart=[e.touches[0].clientX,e.touches[0].clientY];
@@ -1518,7 +1530,7 @@ cv.addEventListener('mousedown',e=>{
   ac();
   const rect=cv.getBoundingClientRect();
   const sx=e.clientX-rect.left, sy=e.clientY-rect.top;
-  if(catAtScreen(sx,sy)&&!won){dragging=true;dragMoved=false;dragPt=[sx,sy];dragCd=0;runQueue=[];}
+  if(catAtScreen(sx,sy)&&!won){beginDrag(sx,sy);}
 });
 cv.addEventListener('mousemove',e=>{
   if(!dragging)return;
