@@ -97,7 +97,7 @@
               <path d="M36 11 L44 15.5 L37.5 21" fill="none" stroke="#e8a04c" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
-          <div class="ruleTxt"><b>Swipe</b> into a box to push it. <b>Tap</b> the floor to walk there.</div>
+          <div class="ruleTxt"><b>Swipe</b> into a box to push it — or <b>hold the cat and drag</b> it around. <b>Tap</b> the floor to walk.</div>
         </div>
         <div class="ruleRow">
           <div class="ruleIcon"><img id="hlpCushion" alt=""></div>
@@ -591,6 +591,7 @@ function cardboard(dur,vol,cutoff,when){ // filtered noise = cardboard friction
 }
 const SFX={
   move(){tone(190,150,0.045,'sine',0.05);},                       // paw pat
+  drag(){tone(430,390,0.028,'triangle',0.028);},                  // tiny paw patter while dragged
   push(){cardboard(0.16,0.14,750);tone(110,80,0.1,'sine',0.07);}, // box slide
   boing(){tone(240,520,0.16,'sine',0.11);},                       // jump up
   pof(){cardboard(0.09,0.16,500);tone(120,70,0.09,'sine',0.1);},  // land in box
@@ -614,7 +615,7 @@ const store={
 const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 let lvIdx=0, lv=null, st=null, kinds=null, hist=[], moves=0, won=false;
 let anims={}, cam={x:0,y:0,s:1}, layout=null, particles=[], shake=0;
-let targetWasCovered={}, deadWarned=false, blink=0, blinkNext=2.5, tGlobal=0, sleepT=0, zzzTimer=0, deadEdges={}, startPos={}, runQueue=[], runCd=0, runStepN=0;
+let targetWasCovered={}, deadWarned=false, blink=0, blinkNext=2.5, tGlobal=0, sleepT=0, zzzTimer=0, deadEdges={}, startPos={}, runQueue=[], runCd=0, runStepN=0, dragging=false, dragPt=null, dragCd=0, dragMoved=false, lastMove=null, pushFace=0;
 
 function coveredKey(t){return t.join(',');}
 function boxTargetCovered(t){
@@ -660,7 +661,7 @@ function doMove(dch,quiet){
   if(won)return;
   const log=[];
   const ns=E.step(lv,st,kinds,dch,log);
-  if(!ns){ SFX.blocked(); nudgePlayer(dch); flashContact(dch); return; }
+  if(!ns){ lastMove=null; SFX.blocked(); nudgePlayer(dch); flashContact(dch); return; }
   hist.push(snapshot()); if(hist.length>400)hist.shift();
   st=ns; moves++; updateHUD();
   let pEnter=false,pExit=false,pushed=false;
@@ -669,9 +670,12 @@ function doMove(dch,quiet){
     else if(ev.type==='exit'){ startJump(ev.id, ev.id==='p'); if(ev.id==='p')pExit=true; }
     else if(ev.type==='push')pushed=true;
   }
+  lastMove={pushed,entered:pEnter,exited:pExit};
+  if(pushed)pushFace=0.4;
   if(pEnter){SFX.boing();buzz(18);}
   else if(pExit){SFX.pop();buzz(18);}
   else if(pushed){SFX.push();buzz(12);pulse('p');}
+  else if(quiet==='drag'){/* drag paw sound handled by caller */}
   else if(!quiet||runStepN%2===0)SFX.move();
   for(const t of lv.targetsBox){
     const k=coveredKey(t),c=boxTargetCovered(t);
@@ -821,6 +825,7 @@ function updateAnims(){
   blinkNext-=1/60;
   if(blinkNext<=0){blink=0.14;blinkNext=1.8+Math.random()*3.5;}
   if(blink>0)blink-=1/60;
+  if(pushFace>0)pushFace-=1/60;
   if(sleepT>0&&sleepT<1){sleepT=Math.min(1,sleepT+0.045);}
   if(sleepT>=1){
     zzzTimer-=1/60;
@@ -837,6 +842,40 @@ function updateAnims(){
       runStepN++;
       const dch=runQueue.shift();
       doMove(dch,true);
+    }
+  }
+  if(dragging&&dragPt&&!won){
+    dragCd-=1/60;
+    if(dragCd<=0){
+      const [wx,wy]=screenToWorld(dragPt[0],dragPt[1]);
+      const cell=cellAtWorld(wx,wy);
+      const [ps,px,py]=st['p'];
+      let first=null,second=null;
+      if(cell&&cell.space===ps&&(cell.x!==px||cell.y!==py)){
+        const ddx=cell.x-px, ddy=cell.y-py;
+        if(Math.abs(ddx)>=Math.abs(ddy)){ first=ddx>0?'R':'L'; if(ddy!==0)second=ddy>0?'D':'U'; }
+        else { first=ddy>0?'D':'U'; if(ddx!==0)second=ddx>0?'R':'L'; }
+      } else if(!cell&&ps!=='root'){
+        // pointer left the box interior: step toward it so the engine resolves an exit
+        const pa=anims['p'];
+        if(pa){
+          const pcx=pa.x+pa.s/2, pcy=pa.y+pa.s/2;
+          const vx=wx-pcx, vy=wy-pcy;
+          first=Math.abs(vx)>=Math.abs(vy)?(vx>0?'R':'L'):(vy>0?'D':'U');
+        }
+      }
+      if(first){
+        const before=st['p'].join(',');
+        doMove(first,'drag');
+        if(st['p'].join(',')===before&&second)doMove(second,'drag');
+        const moved=st['p'].join(',')!==before;
+        if(moved){
+          dragMoved=true;
+          if(lastMove&&lastMove.pushed){ dragCd=0.125; }        // pushing feels heavier
+          else if(lastMove&&(lastMove.entered||lastMove.exited)){ dragCd=0.16; }
+          else { dragCd=0.07; SFX.drag(); }
+        } else dragCd=0.07;
+      }
     }
   }
   tGlobal+=1/60;
@@ -1113,7 +1152,7 @@ function drawCat(a){
   const baseY=a.y+a.ny+s*0.86;
   drawShadow(cx,baseY,s,lift);
   const breathe=(e>0?Math.sin(tGlobal*1.7)*0.02*e:Math.sin(tGlobal*2.4)*0.015);
-  const p=1+a.pulse*0.16+breathe;
+  const p=1+a.pulse*0.16+breathe+(dragging?0.07:0);
   const stretch=a.jump>0?1+Math.sin(Math.PI*a.jump)*0.12:1;
   const cy=a.y+a.ny+s/2-lift*s+s*0.07*e;   // settle down onto the cushion
   const bw=s*(0.72+0.10*e)*p, bh=s*0.72*p*stretch*(1-0.30*e); // wider + flatter
@@ -1168,7 +1207,17 @@ function drawCat(a){
   }
   // face
   const eyeY=by+bh*0.42, exL=bx+bw*0.32, exR=bx+bw*0.68;
+  const effort=pushFace>0&&e<=0.45;
+  if(effort){
+    // determined squeezed eyes + flat mouth
+    ctx.lineWidth=L(1,s*0.03);ctx.strokeStyle=C.catInk;ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(exL-s*0.05,eyeY-s*0.02);ctx.lineTo(exL+s*0.045,eyeY+s*0.015);
+    ctx.moveTo(exR+s*0.05,eyeY-s*0.02);ctx.lineTo(exR-s*0.045,eyeY+s*0.015);
+    ctx.stroke();
+  }
   const closed=(e>0.45)||blink>0;
+  if(!effort)
   if(closed){
     ctx.lineWidth=L(1,s*0.028);ctx.strokeStyle=C.catInk;
     if(e>0.45){ // peaceful closed arcs (∪ shape)
@@ -1185,6 +1234,12 @@ function drawCat(a){
   } else {
     ctx.fillStyle=C.catInk;
     ctx.beginPath();ctx.arc(exL,eyeY,L(1.4,s*0.052),0,7);ctx.arc(exR,eyeY,L(1.4,s*0.052),0,7);ctx.fill();
+  }
+  if(effort){
+    // cheeks puffed slightly: small flat mouth replaces the smile below
+    ctx.strokeStyle=C.catInk;ctx.lineWidth=L(0.9,s*0.02);ctx.globalAlpha=0.8;
+    ctx.beginPath();ctx.moveTo(cx-s*0.035,by+bh*0.655);ctx.lineTo(cx+s*0.035,by+bh*0.655);ctx.stroke();
+    ctx.globalAlpha=1;
   }
   // nose + mouth
   ctx.fillStyle=C.catPink;
@@ -1281,6 +1336,22 @@ function frame(){
   ctx.translate(l.W/2,l.H/2);ctx.scale(cam.s,cam.s);ctx.translate(-cam.x,-cam.y);
   drawFloor('root',(x,y)=>rootRect(x,y),false);
   drawTargets('root',(x,y)=>rootRect(x,y));
+  if(dragging&&dragPt){
+    const [hwx,hwy]=screenToWorld(dragPt[0],dragPt[1]);
+    const hc=cellAtWorld(hwx,hwy);
+    if(hc){
+      const w=E.isWall(lv,hc.space,hc.x,hc.y);
+      if(w===false){
+        let hr;
+        if(hc.space==='root')hr=rootRect(hc.x,hc.y);
+        else{const cm=interiorMetrics(hc.space,anims[hc.space]);hr={x:cm.x0+hc.x*cm.ics,y:cm.y0+hc.y*cm.ics,s:cm.ics};}
+        ctx.fillStyle='rgba(255,236,180,0.30)';
+        rr(hr.x+hr.s*0.04,hr.y+hr.s*0.04,hr.s*0.92,hr.s*0.92,hr.s*0.12);ctx.fill();
+        ctx.strokeStyle='rgba(255,236,180,0.5)';ctx.lineWidth=Math.max(1,hr.s*0.03);
+        rr(hr.x+hr.s*0.04,hr.y+hr.s*0.04,hr.s*0.92,hr.s*0.92,hr.s*0.12);ctx.stroke();
+      }
+    }
+  }
   // painter's algorithm: sort by footprint bottom edge
   const items=[];
   const spR=lv.spaces.root;
@@ -1388,6 +1459,12 @@ function tryWalkTo(sx,sy){
   if(path===null||!path.length){SFX.blocked();return;}
   runQueue=path; runCd=0; runStepN=0;
 }
+function catAtScreen(sx,sy){
+  const [wx,wy]=screenToWorld(sx,sy);
+  const a=anims['p']; if(!a)return false;
+  const pad=a.s*0.22;
+  return wx>=a.x-pad&&wx<=a.x+a.s+pad&&wy>=a.y-a.s*0.35&&wy<=a.y+a.s+pad;
+}
 function tryDoubleTapAt(sx,sy){
   const [wx,wy]=screenToWorld(sx,sy);
   const id=boxAt(wx,wy);
@@ -1396,8 +1473,23 @@ function tryDoubleTapAt(sx,sy){
 /* ================= input ================= */
 let touchStart=null, lastTap=null;
 const stage=document.getElementById('stage');
-stage.addEventListener('touchstart',e=>{ac();touchStart=[e.touches[0].clientX,e.touches[0].clientY];},{passive:true});
+stage.addEventListener('touchstart',e=>{
+  ac();
+  const rect=cv.getBoundingClientRect();
+  const sx=e.touches[0].clientX-rect.left, sy=e.touches[0].clientY-rect.top;
+  if(catAtScreen(sx,sy)&&!won){
+    dragging=true; dragMoved=false; dragPt=[sx,sy]; dragCd=0; runQueue=[]; touchStart=null;
+    return;
+  }
+  touchStart=[e.touches[0].clientX,e.touches[0].clientY];
+},{passive:true});
+stage.addEventListener('touchmove',e=>{
+  if(!dragging)return;
+  const rect=cv.getBoundingClientRect();
+  dragPt=[e.touches[0].clientX-rect.left, e.touches[0].clientY-rect.top];
+},{passive:true});
 stage.addEventListener('touchend',e=>{
+  if(dragging){dragging=false;dragPt=null;return;}
   if(!touchStart)return;
   const ex=e.changedTouches[0].clientX,ey=e.changedTouches[0].clientY;
   const dx=ex-touchStart[0],dy=ey-touchStart[1];
@@ -1422,8 +1514,21 @@ stage.addEventListener('touchend',e=>{
   runQueue=[];
   doMove(Math.abs(dx)>Math.abs(dy)?(dx>0?'R':'L'):(dy>0?'D':'U'));
 },{passive:true});
+cv.addEventListener('mousedown',e=>{
+  ac();
+  const rect=cv.getBoundingClientRect();
+  const sx=e.clientX-rect.left, sy=e.clientY-rect.top;
+  if(catAtScreen(sx,sy)&&!won){dragging=true;dragMoved=false;dragPt=[sx,sy];dragCd=0;runQueue=[];}
+});
+cv.addEventListener('mousemove',e=>{
+  if(!dragging)return;
+  const rect=cv.getBoundingClientRect();
+  dragPt=[e.clientX-rect.left, e.clientY-rect.top];
+});
+window.addEventListener('mouseup',()=>{ if(dragging){dragging=false;dragPt=null;} });
 cv.addEventListener('click',e=>{
   ac();
+  if(dragMoved){dragMoved=false;return;}
   const rect=cv.getBoundingClientRect();
   const [wwx,wwy]=screenToWorld(e.clientX-rect.left,e.clientY-rect.top);
   if(!boxAt(wwx,wwy)) tryWalkTo(e.clientX-rect.left,e.clientY-rect.top);
